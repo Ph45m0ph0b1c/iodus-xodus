@@ -1,122 +1,106 @@
-<p align="center"><img width="128" src="assets/Icon/Icon.ico" /></p>
-<h1 align="center">Xodus</h1>
-<p align="center">The great gaming migration to Linux</p>
-<p align="center">
-    <a href="https://discord.gg/ZG774FK4tq">
-        <img src="https://img.shields.io/discord/1123890623586504714?logo=discord&style=for-the-badge&color=red&label=Game+Launchers+Reverse+Engineering" alt="Discord" />
-    </a>
-</p>
+# iOdus backend (iodus-xodus)
 
-> [!CAUTION]
-> This is an unofficial project - use at your own risk. It is not affiliated with, endorsed by, or sponsored by Microsoft or XBOX; all trademarks, product names, and company names or logos mentioned herein are the property of their respective owners.
+This repository is the backend of [iOdus](https://github.com/burghr/iOdus), a
+native macOS front end for Xbox PC games. It is a fork of
+[Xodus](https://github.com/xodus-gaming/xodus) with the backend patches of
+[Xodus Nexus](https://github.com/domsvoboda/xodus-nexus) and a few iOdus changes.
 
-## Current state of the project
+The backend does all the work with the Microsoft account: sign-in, the library,
+licenses, downloads, the decryption of the game executable, achievements, friends,
+and messages. iOdus starts `xodus-cli` as a subprocess and reads its JSON output.
+The account tokens stay in this program and in the macOS Keychain.
 
-The project can now login, download packages and obtain licenses for games.
+> **Unofficial project.** It is not affiliated with, endorsed by, or sponsored by
+> Microsoft or Xbox. All trademarks belong to their owners. Use it at your own risk.
 
-These parts are still quite scattered around.
+## Branches
 
-- [x] Device login
-- [x] User login
-- [x] XBOX authorization
-- [x] MSIXVC download
-- [x] On-demand .exe decryption [#50](https://github.com/xodus-gaming/xodus/issues/50)
-- [ ] MSIXVC2 support [#53](https://github.com/xodus-gaming/xodus/issues/53)
+| Branch | Content |
+|---|---|
+| `iodus` (default) | Xodus `53ea781` + the 76 Nexus backend patches + the iOdus changes |
+| `main` | The Xodus upstream branch, unchanged |
 
-## FAQ
+The `iodus` branch has one commit for each Nexus patch, in the order of
+[`nexus/backend-source.lock.json`](nexus/backend-source.lock.json). The patches
+come from Xodus Nexus `develop` at `6100e3a`. See [`nexus/README.md`](nexus/README.md).
 
-**Q: What is Xodus**  
-Xodus aims to bring XBOX PC games to Linux and possibly Mac devices.
+The README of Xodus upstream is in
+[`docs/xodus-upstream-README.md`](docs/xodus-upstream-README.md).
 
-**Q: When can I play my Minecraft Bedrock?**  
-While Xodus is quickly maturing, there is still a lot of work to support it from Wine standpoint to provide necessary XBOX Services to games.  
-_TL;DR_ soon<sup>tm</sup>
+## The iOdus changes
 
-**Q: How to get involved?**  
-Start by joining our Discord or review any open GitHub issues .
+On top of Xodus and the Nexus patches, the `iodus` branch has these changes:
 
-**Q: What games will be supported?**  
-We hope to manage to support most of the catalog, the limitation is the game has to be GDK and in MSIXVC format.  
-So far `Gears of War 4` is a prominent unsupported title for the time being.
+1. **`xodus-cli service`:** The account service is a library with `run()`. The
+   `xodus-service` program and the new `xodus-cli service` command both call it.
+   With the service in `xodus-cli`, one program creates and changes the Keychain
+   items, so macOS does not ask for your password at each token change.
+   - The service reads its socket path from `XODUS_SOCKET`.
+   - It removes a stale socket file before it starts.
+   - It prints `XODUS_SERVICE_READY` when it listens.
+2. **Game arguments:** `xodus-cli run` passes the arguments after `--` to the game.
+   iOdus uses this to start Unity games with `-window-mode borderless`, because
+   D3DMetal crashes on a focus change in exclusive full screen.
+3. **Project rule:** [`CLAUDE.md`](CLAUDE.md) has the rule "Xbox Live: real data
+   only" for all work on this backend.
 
-**Q: Will XBOX Backward Compatibility on PC work?**  
-While Xodus is capable of downloading and running those titles. It's possible these games will work only after additional patches to wine, dxvk or vkd3d-proton.
+## Build
 
-## Building
+You need Rust 1.98 or later (the workspace sets `rust-version = "1.98.0"`),
+`protobuf`, and `cmake`. On macOS:
 
-The project structure is as follows.
-
-```
-.
-├── msixvc - [rlib] common rlib crate for utilities for parsing MSIXVC and XSP files
-├── xodus - [rlib] common rlib crate that contains core xodus functionality, API calls abstractions and utilities
-├── xodus-cli - [bin] CLI currently used for iterating over new xodus features
-└── xodus-service - [bin] service process exposing a xodus.sock for IPC communication, it takes care of xgameruntime.dll integration.
-```
-
-> [!NOTE]
-> xodus-service aims to become a main point of integration. All xodus clients will connect to it to interact with games and XBOX services.
-
-### Prerequisites
-
-- Rust version 1.98 or later
-- Right now CLI relies on wry and tao to show a login page. Consult https://docs.rs/wry/latest/wry/#platform-considerations
-- xodus-service relies on `protoc` to compile `proto/` definitions make sure to install it for your platform
-
-### Running
-
-Building all crates in release mode
-
-```bash
-cargo build --release --workspace
+```sh
+brew install protobuf cmake
+rustup update stable
+cargo build --locked --release -p xodus-cli -p xodus-service
 ```
 
-Running cli in debug
+The programs are in `target/release/`. For iOdus, sign them with the local
+signing identity after each build (`scripts/sign-backend.sh` in the iOdus
+repository). A program with a new signature cannot use the Keychain items of the
+old one, so sign out and sign in again in iOdus after the first signed build.
 
-```
-cargo run -- --help
-```
+## The commands that iOdus uses
 
-Running xodus-service in debug
+| Command | Use in iOdus |
+|---|---|
+| `account --json` | Is an account stored? |
+| `login` | Opens the Microsoft sign-in window |
+| `logout --device` | Removes the account and the device items |
+| `library --json --market <region>` | The owned and Game Pass entitlements |
+| `profile --json` | The gamertag, the gamerpic, and the gamerscore |
+| `resolve-package <product> --json --market <region>` | The package of a game, its size, and its version |
+| `streaming <product> <folder> --progress-json --control-stdin` | The download of a game, with progress lines and pause or resume on stdin |
+| `run <folder> <wine> --exe <exe> --materialize-chain --market <region> [-- <game arguments>]` | Gets the license, decrypts the executable into a temporary launch view, and starts the game with Wine |
+| `service` | The account service on `$XODUS_SOCKET`, for the Xbox runtime in Wine |
+| `achievements <title id> --json` | The achievements of one title (read only) |
+| `native-social friends` | The friends list |
+| `native-social people` | Profiles and the title history (JSON request on stdin) |
+| `native-social listen` | One process for the inbox, conversations, and sending messages (JSON lines on stdin and stdout) |
 
-```
-cargo run --bin xodus-service
-```
+Run `xodus-cli --help` and `xodus-cli <command> --help` for all commands and options.
 
-Debug and profile `xodus-cli` or `xodus-service` with [tokio-console]([tokio-console](https://github.com/tokio-rs/console))
+## Update the Nexus patches
 
-```
-RUSTFLAGS="--cfg tokio_unstable" cargo run --features tokio_console 
-```
+1. Get the new Nexus `develop` commit and its `backend-source.lock.json`.
+2. Start a new branch from the Xodus commit that the lock file names.
+3. Apply each patch as one commit, in the order of the lock file.
+4. Apply the iOdus commits again (the service command, the game arguments, and
+   `CLAUDE.md`).
+5. Copy the lock file to `nexus/`, and change `nexus/README.md`.
+6. Build, and test iOdus with it, before the branch replaces `iodus`.
 
-> [!WARNING]
-> For better performance when decrypting MSIXVC files, the `aes` and `ssse3` features are enabled on `x86_64`,
-> and the `aes` feature is enabled on `aarch64`. This means that the program will crash with an illegal instruction
-> error when running on a CPU which doesn't support those instructions.
->
-> See https://en.wikipedia.org/wiki/AES_instruction_set for a list of compatible CPUs (every processor from
-> 2011 onwards should be supported).
+## Project rules
 
-### CLI Usage
+See [`CLAUDE.md`](CLAUDE.md). Code and tests never send made-up or test data to
+Xbox Live or other Microsoft services. Reads are allowed. Tests of code that
+writes use a fake server or injected answers.
 
-```
-Usage: xodus-cli <COMMAND>
+## License
 
-Commands:
-  download    Download msixvc or xsp files for a given game
-  license     Dump CIKs for use with XvdTool
-  extract     Extract locally stored msixvc file
-  login       
-  streaming   Download and extract the game through streaming algorithm
-  clep        Generate or decrypt base64-encoded CLEP challenge data
-  sp-license  Decode SPLicenseBlock
-  help        Print this message or the help of the given subcommand(s)
+- **Xodus:** GPL-3.0. See [`LICENSE`](LICENSE).
+- **Xodus Nexus patches:** MIT, in this GPL-3.0 work.
+- **iOdus changes:** GPL-3.0, the same as the rest of this repository.
 
-Options:
-  -h, --help     Print help
-  -V, --version  Print version
-```
-
-## Special Thanks
-
-- [XvdTool.Streaming](https://github.com/LukeFZ/XvdTool.Streaming) and [CikExtractor](https://github.com/LukeFZ/CikExtractor) by LukeFZ
+If you give someone a program that contains this backend (for example an iOdus
+app bundle with `xodus-cli`), the GPL requires that they can get its source.
