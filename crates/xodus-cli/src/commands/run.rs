@@ -710,20 +710,26 @@ fn make_temp_file(folder: &str) -> std::io::Result<std::fs::File> {
     }
 }
 
+/// The size of the RAM disk for the decrypted files, in 512-byte sectors:
+/// twice the files (as before), and never less than 4 MB. newfs_hfs refuses a
+/// volume under 512 KB, so a game with a small encrypted executable (a starter
+/// for another launcher, for example) stopped with "partition is too small"
+/// and a panic. A game with no encrypted file gets the minimum.
+fn ram_disk_sectors(encrypted_lengths: impl Iterator<Item = u64>) -> u64 {
+    const MINIMUM_SECTORS: u64 = 4 * 1024 * 1024 / 512;
+    let disk_size: u64 = encrypted_lengths.map(|length| length + 4 * PAGE_SIZE as u64).sum();
+    disk_size.div_ceil(256).max(MINIMUM_SECTORS)
+}
+
 #[cfg(target_os = "macos")]
 async fn prepare(lfiles: &HashMap<String, SegmentFile>) -> (impl AsyncFnOnce(), String) {
-    let disk_size: u64 = lfiles
-        .iter()
-        .filter(|f| f.1.keep_encrypted)
-        .map(|f| f.1.length + 4 * PAGE_SIZE as u64)
-        .reduce(|o, s| o + s)
-        .unwrap();
+    let sectors = ram_disk_sectors(lfiles.values().filter(|f| f.keep_encrypted).map(|f| f.length));
 
     let device_s = String::from_utf8(
         Command::new("/usr/bin/hdiutil")
             .arg("attach")
             .arg("-nomount")
-            .arg(format!("ram://{}", disk_size.div_ceil(256)))
+            .arg(format!("ram://{sectors}"))
             .output()
             .await
             .unwrap()
@@ -1876,6 +1882,18 @@ mod tests {
         std::fs::write(outside.path().join("External.exe"), b"outside").unwrap();
         symlink(outside.path(), root.path().join("External")).unwrap();
         assert!(resolve_package_file(root.path(), "external/EXTERNAL.exe").is_err());
+    }
+
+    #[test]
+    fn the_ram_disk_never_falls_below_the_file_system_minimum() {
+        let minimum = 4 * 1024 * 1024 / 512;
+        // No encrypted file, or a small starter executable: the 4 MB minimum.
+        assert_eq!(ram_disk_sectors(std::iter::empty()), minimum);
+        assert_eq!(ram_disk_sectors([100 * 1024u64].into_iter()), minimum);
+        // A large executable keeps twice its size (Forza Horizon 6: 184 MB).
+        let large = 184_143_872u64;
+        assert_eq!(ram_disk_sectors([large].into_iter()), (large + 4 * PAGE_SIZE as u64).div_ceil(256));
+        assert!(ram_disk_sectors([large].into_iter()) * 512 >= 2 * large);
     }
 
     #[test]
