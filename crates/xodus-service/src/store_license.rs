@@ -63,7 +63,7 @@ async fn issue(context: &SimpleContext, request: StoreLicenseTokenRequest) -> Re
     let device_response = xodus::api::live::exchange_device_token(&context.client, device.clone(),
         client_id.into(), "www.microsoft.com".into(), Some(soap::PolicyReference::mbi_ssl()))
         .await.map_err(|_| FAIL)?;
-    if device_response.token_type != "urn:passport:compact" { return Err(FAIL) }
+    if !device_ticket_type(&device_response.token_type) { return Err(FAIL) }
     let Token::Compact(device_token) = Token::try_from(device_response).map_err(|_| FAIL)? else { return Err(FAIL) };
     let user_response = xodus::api::live::exchange_user_token(&context.client, user_sts,
         account.username, device, None, Some("Silent".into()), client_id.into(),
@@ -98,6 +98,12 @@ async fn issue(context: &SimpleContext, request: StoreLicenseTokenRequest) -> Re
     Ok(response.license_token)
 }
 
+// Device exchanges can return the same supported delegation-compact format
+// as user exchanges. Token::try_from validates and normalizes either format.
+fn device_ticket_type(token_type: &str) -> bool {
+    user_ticket_type(token_type)
+}
+
 fn user_ticket_type(token_type: &str) -> bool {
     matches!(token_type, "urn:passport:compact" | "urn:passport:delegationcompact")
 }
@@ -105,6 +111,14 @@ fn user_ticket_type(token_type: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn store_license_accepts_delegation_compact_device_tickets() {
+        assert!(device_ticket_type("urn:passport:compact"));
+        assert!(device_ticket_type("urn:passport:delegationcompact"));
+        assert!(!device_ticket_type("urn:passport:legacy"));
+        assert!(!device_ticket_type("unexpected"));
+    }
 
     #[test]
     fn store_license_accepts_delegation_compact_user_tickets() {
